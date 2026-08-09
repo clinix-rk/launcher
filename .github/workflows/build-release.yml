@@ -16,61 +16,81 @@ jobs:
     runs-on: windows-latest
     
     steps:
-    - uses: actions/checkout@v4
-    
-    - name: Set up .NET
-      uses: actions/setup-dotnet@v4
-      with:
-        dotnet-version: '8.0.x'
-    
-    - name: Restore dependencies
-      run: dotnet restore src/AppLauncher/AppLauncher.csproj
-    
-    - name: Build
-      run: dotnet build -c Release --no-restore src/AppLauncher/AppLauncher.csproj
-    
-    - name: Test (if applicable)
-      run: dotnet test -c Release --no-build src/AppLauncher/ --verbosity normal
-      continue-on-error: true
-    
-    - name: Get version
-      id: version
-      shell: pwsh
-      run: |
-        if ('${{ github.ref }}' -match 'refs/tags/v(.+)') {
-          $VERSION = $matches[1]
-        } else {
-          $VERSION = '${{ github.event.inputs.version }}'.TrimStart('v')
-        }
-        echo "VERSION=$VERSION" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
-        Write-Output "Version: $VERSION"
-    
-    - name: Publish self-contained EXE
-      run: |
-        dotnet publish -c Release -o ./publish `
-          --self-contained `
-          -p:PublishReadyToRun=true `
-          -p:PublishSingleFile=true `
-          -p:PublishTrimmed=false `
-          -p:SelfContained=true `
-          -p:RuntimeIdentifier=win-x64 `
-          src/AppLauncher/AppLauncher.csproj
-    
-    - name: Rename EXE
-      shell: pwsh
-      run: |
-        Copy-Item -Path "publish/AppLauncher.exe" `
-          -Destination "publish/AppLauncher-${{ steps.version.outputs.VERSION }}.exe"
-    
-    - name: Create checksums
-      shell: pwsh
-      run: |
-        $file = "publish/AppLauncher-${{ steps.version.outputs.VERSION }}.exe"
-        $hash = (Get-FileHash -Path $file -Algorithm SHA256).Hash
-        "$hash  AppLauncher-${{ steps.version.outputs.VERSION }}.exe" | Out-File -FilePath "publish/SHA256SUMS.txt"
-        Get-Content "publish/SHA256SUMS.txt"
-    
-    - name: Upload artifacts
-      uses: actions/upload-artifact@v4
-      with:
-        name: AppLauncher-${{
+      - uses: actions/checkout@v4
+      
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      
+      - name: Restore dependencies
+        run: dotnet restore src/AppLauncher/AppLauncher.csproj
+      
+      - name: Build
+        run: dotnet build -c Release --no-restore src/AppLauncher/AppLauncher.csproj
+      
+      - name: Test (if applicable)
+        run: dotnet test -c Release --no-build src/AppLauncher/ --verbosity normal
+        continue-on-error: true
+      
+      - name: Get version
+        id: version
+        shell: pwsh
+        run: |
+          if ('${{ github.ref }}' -match 'refs/tags/v(.+)') {
+            $VERSION = $matches[1]
+          } else {
+            $VERSION = '${{ github.event.inputs.version }}'.TrimStart('v')
+          }
+          "VERSION=$VERSION" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          Write-Output "Version: $VERSION"
+      
+      - name: Publish self-contained EXE
+        shell: pwsh
+        run: |
+          dotnet publish -c Release -o ./publish `
+            --self-contained `
+            -p:PublishReadyToRun=true `
+            -p:PublishSingleFile=true `
+            -p:PublishTrimmed=false `
+            -p:SelfContained=true `
+            -p:RuntimeIdentifier=win-x64 `
+            src/AppLauncher/AppLauncher.csproj
+      
+      - name: Rename EXE
+        shell: pwsh
+        run: |
+          Copy-Item -Path "publish/AppLauncher.exe" `
+            -Destination "publish/AppLauncher-${{ steps.version.outputs.VERSION }}.exe"
+      
+      - name: Create checksums
+        shell: pwsh
+        run: |
+          $file = "publish/AppLauncher-${{ steps.version.outputs.VERSION }}.exe"
+          $hash = (Get-FileHash -Path $file -Algorithm SHA256).Hash
+          "$hash  AppLauncher-${{ steps.version.outputs.VERSION }}.exe" | Out-File -FilePath "publish/SHA256SUMS.txt"
+          Get-Content "publish/SHA256SUMS.txt"
+      
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: AppLauncher-${{ steps.version.outputs.VERSION }}
+          path: |
+            publish/AppLauncher-${{ steps.version.outputs.VERSION }}.exe
+            publish/SHA256SUMS.txt
+          retention-days: 7
+          if-no-files-found: error
+      
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            publish/AppLauncher-${{ steps.version.outputs.VERSION }}.exe
+            publish/SHA256SUMS.txt
+          tag_name: ${{ github.ref_name }}
+          generate_release_notes: true
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
