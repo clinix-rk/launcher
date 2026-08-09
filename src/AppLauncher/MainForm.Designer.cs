@@ -3,13 +3,6 @@ namespace AppLauncher
     partial class MainForm
     {
         private System.ComponentModel.IContainer components = null;
-        private Label lblCurrentVersion;
-        private Button btnCheckUpdate;
-        private Button btnUpdate;
-        private Button btnRollback;
-        private Button btnStartApp;
-        private Label lblStatus;
-        private TextBox txtLog;
 
         protected override void Dispose(bool disposing)
         {
@@ -22,13 +15,13 @@ namespace AppLauncher
 
         private void InitializeComponent()
         {
-            this.lblCurrentVersion = new Label();
-            this.btnCheckUpdate = new Button();
-            this.btnUpdate = new Button();
-            this.btnRollback = new Button();
-            this.btnStartApp = new Button();
-            this.lblStatus = new Label();
-            this.txtLog = new TextBox();
+            this.lblCurrentVersion = new System.Windows.Forms.Label();
+            this.btnCheckUpdate = new System.Windows.Forms.Button();
+            this.btnUpdate = new System.Windows.Forms.Button();
+            this.btnRollback = new System.Windows.Forms.Button();
+            this.btnStartApp = new System.Windows.Forms.Button();
+            this.lblStatus = new System.Windows.Forms.Label();
+            this.SuspendLayout();
 
             // lblCurrentVersion
             this.lblCurrentVersion.AutoSize = true;
@@ -85,27 +78,26 @@ namespace AppLauncher
             this.lblStatus.TabIndex = 5;
             this.lblStatus.Text = "Ready.";
 
-            // txtLog
-            this.txtLog.Location = new System.Drawing.Point(12, 110);
-            this.txtLog.Multiline = true;
-            this.txtLog.Name = "txtLog";
-            this.txtLog.ReadOnly = true;
-            this.txtLog.ScrollBars = ScrollBars.Vertical;
-            this.txtLog.Size = new System.Drawing.Size(458, 200);
-            this.txtLog.TabIndex = 6;
-
             // MainForm
-            this.ClientSize = new System.Drawing.Size(480, 330);
+            this.ClientSize = new System.Drawing.Size(480, 140);
             this.Controls.Add(this.lblCurrentVersion);
             this.Controls.Add(this.btnCheckUpdate);
             this.Controls.Add(this.btnUpdate);
             this.Controls.Add(this.btnRollback);
             this.Controls.Add(this.btnStartApp);
             this.Controls.Add(this.lblStatus);
-            this.Controls.Add(this.txtLog);
             this.Name = "MainForm";
             this.Text = "Application Launcher";
             this.Load += new System.EventHandler(this.MainForm_Load);
+            this.ResumeLayout(false);
+            this.PerformLayout();
         }
+
+        private System.Windows.Forms.Label lblCurrentVersion;
+        private System.Windows.Forms.Button btnCheckUpdate;
+        private System.Windows.Forms.Button btnUpdate;
+        private System.Windows.Forms.Button btnRollback;
+        private System.Windows.Forms.Button btnStartApp;
+        private System.Windows.Forms.Label lblStatus;
     }
 }
