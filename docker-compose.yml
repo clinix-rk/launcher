@@ -1,0 +1,61 @@
+version: '3.8'
+
+services:
+  postgres-db:
+    image: postgres:16-alpine
+    container_name: myapp-db
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-myapp_db}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-secretpassword}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  forge:
+    image: ghcr.io/YOUR_ORG/forge:latest
+    container_name: myapp-forge
+    ports:
+      - "8080:8080"
+    environment:
+      - SPRING_DATASOURCE_URL=jdbc:postgresql://postgres-db:5432/${POSTGRES_DB:-myapp_db}
+      - SPRING_DATASOURCE_USERNAME=${POSTGRES_USER:-postgres}
+      - SPRING_DATASOURCE_PASSWORD=${POSTGRES_PASSWORD:-secretpassword}
+      - SPRING_JPA_HIBERNATE_DDL_AUTO=${SPRING_JPA_HIBERNATE_DDL_AUTO:-validate}
+      - SPRING_PROFILES_ACTIVE=${SPRING_PROFILES_ACTIVE:-prod}
+      # Add any additional backend environment variables
+      - APP_NAME=${APP_NAME:-MyApp}
+      - APP_ENV=${APP_ENV:-production}
+    depends_on:
+      postgres-db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  lens:
+    image: ghcr.io/YOUR_ORG/lens:latest
+    container_name: myapp-lens
+    ports:
+      - "80:80"
+    environment:
+      - REACT_APP_API_URL=http://forge:8080
+      - REACT_APP_ENV=${REACT_APP_ENV:-production}
+    depends_on:
+      - forge
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  postgres_data:

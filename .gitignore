@@ -1,0 +1,28 @@
+# Environment variables
+.env
+.env.local
+
+# Launcher state
+current_version.txt
+backup_version.txt
+launcher.log
+
+# Database backups
+db_backup_*.tar.gz
+
+# IDE
+.vs/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Build output
+bin/
+obj/
+dist/
+publish/
+
+# OS
+Thumbs.db
+.DS_Store

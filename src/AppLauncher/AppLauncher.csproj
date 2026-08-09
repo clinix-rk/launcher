@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk.WindowsDesktop">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>AppLauncher</AssemblyName>
+    <RootNamespace>AppLauncher</RootNamespace>
+    <Version>1.0.0</Version>
+    <Authors>Your Organization</Authors>
+    <Description>Zero-downtime launcher for Lens + Forge application</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="DotNetEnv" Version="2.5.0" />
+  </ItemGroup>
+
+</Project>
