@@ -43,8 +43,11 @@ namespace AppLauncher.Services
             _log = log;
         }
 
-        public async Task<SetupResult> AssessAsync(CancellationToken cancellationToken = default)
+        public async Task<SetupResult> AssessAsync(
+            IProgress<ProgressStep>? progress = null,
+            CancellationToken cancellationToken = default)
         {
+            ProgressReport.Report(progress, 1, 3, "Checking prerequisites");
             _log.Info("Checking environment prerequisites...");
 
             if (!File.Exists(_config.ComposeFilePath))
@@ -52,7 +55,7 @@ namespace AppLauncher.Services
                 return new SetupResult
                 {
                     State = SetupState.NeedsComposeFile,
-                    Message = "docker-compose.yml is missing next to the launcher."
+                    Message = "docker-compose.yml is missing next to the launcher. Rebuild so it is copied from the repo root, or place the file beside AppLauncher.exe."
                 };
             }
 
@@ -65,6 +68,7 @@ namespace AppLauncher.Services
                 };
             }
 
+            ProgressReport.Report(progress, 2, 3, "Checking WSL");
             bool wslAvailable = await _wsl.IsWslAvailableAsync(cancellationToken);
             if (!wslAvailable)
             {
@@ -95,6 +99,7 @@ namespace AppLauncher.Services
                 };
             }
 
+            ProgressReport.Report(progress, 3, 3, "Checking Docker");
             if (!await _compose.IsDockerReadyAsync(cancellationToken))
             {
                 // Try starting daemon first.
@@ -117,35 +122,43 @@ namespace AppLauncher.Services
             };
         }
 
-        public async Task<SetupResult> RepairAsync(CancellationToken cancellationToken = default)
+        public async Task<SetupResult> RepairAsync(
+            IProgress<ProgressStep>? progress = null,
+            CancellationToken cancellationToken = default)
         {
-            var current = await AssessAsync(cancellationToken);
+            ProgressReport.Report(progress, 1, 3, "Assessing environment");
+            var current = await AssessAsync(progress: null, cancellationToken);
             if (current.IsReady)
             {
                 return current;
             }
 
+            ProgressReport.Report(progress, 2, 3, DescribeRepairStep(current.State));
             switch (current.State)
             {
                 case SetupState.NeedsComposeFile:
-                    _log.Error("Place docker-compose.yml beside AppLauncher.exe and retry.");
+                    _log.Error("docker-compose.yml is missing. Ensure it exists at the repo root before build, or place it beside AppLauncher.exe.");
                     return current;
 
                 case SetupState.NeedsEnvFile:
                     EnsureEnvFile();
-                    return await AssessAsync(cancellationToken);
+                    ProgressReport.Report(progress, 3, 3, "Re-checking environment");
+                    return await AssessAsync(progress: null, cancellationToken);
 
                 case SetupState.NeedsWslInstall:
                     await InstallWslAsync(cancellationToken);
-                    return await AssessAsync(cancellationToken);
+                    ProgressReport.Report(progress, 3, 3, "Re-checking environment");
+                    return await AssessAsync(progress: null, cancellationToken);
 
                 case SetupState.NeedsDistro:
                     await InstallUbuntuAsync(cancellationToken);
-                    return await AssessAsync(cancellationToken);
+                    ProgressReport.Report(progress, 3, 3, "Re-checking environment");
+                    return await AssessAsync(progress: null, cancellationToken);
 
                 case SetupState.NeedsDocker:
                     await InstallDockerInWslAsync(cancellationToken);
-                    return await AssessAsync(cancellationToken);
+                    ProgressReport.Report(progress, 3, 3, "Re-checking environment");
+                    return await AssessAsync(progress: null, cancellationToken);
 
                 default:
                     return current;
@@ -170,6 +183,16 @@ namespace AppLauncher.Services
                 _log.Warning("Created a default .env — update secrets before production use.");
             }
         }
+
+        private static string DescribeRepairStep(SetupState state) => state switch
+        {
+            SetupState.NeedsEnvFile => "Creating .env file",
+            SetupState.NeedsWslInstall => "Installing WSL (may require approval)",
+            SetupState.NeedsDistro => "Installing Ubuntu",
+            SetupState.NeedsDocker => "Installing Docker in WSL",
+            SetupState.NeedsComposeFile => "Compose file missing",
+            _ => "Repairing environment"
+        };
 
         private async Task InstallWslAsync(CancellationToken cancellationToken)
         {

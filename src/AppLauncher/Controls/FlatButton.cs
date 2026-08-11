@@ -11,9 +11,9 @@ namespace AppLauncher.Controls
         private bool _hover;
         private bool _pressed;
 
-        public Color NormalColor { get; set; } = AppTheme.BgElevated;
-        public Color HoverColor { get; set; } = Color.FromArgb(46, 66, 78);
-        public Color PressedColor { get; set; } = AppTheme.TealDim;
+        public Color NormalColor { get; set; } = AppTheme.BgPanel;
+        public Color HoverColor { get; set; } = AppTheme.BgElevated;
+        public Color PressedColor { get; set; } = Color.FromArgb(220, 228, 238);
         public Color BorderColor { get; set; } = AppTheme.Border;
         public bool IsPrimary { get; set; }
 
@@ -65,24 +65,24 @@ namespace AppLauncher.Controls
             Color fill = NormalColor;
             if (IsPrimary)
             {
-                fill = Enabled ? AppTheme.Teal : AppTheme.TealDim;
-                if (Enabled && _hover) fill = AppTheme.TealBright;
-                if (Enabled && _pressed) fill = AppTheme.TealDim;
+                fill = Enabled ? AppTheme.Navy : AppTheme.NavyDim;
+                if (Enabled && _hover) fill = AppTheme.NavyBright;
+                if (Enabled && _pressed) fill = AppTheme.NavyDim;
             }
             else
             {
                 if (Enabled && _hover) fill = HoverColor;
                 if (Enabled && _pressed) fill = PressedColor;
-                if (!Enabled) fill = AppTheme.BgPanel;
+                if (!Enabled) fill = AppTheme.BgElevated;
             }
 
-            using var path = RoundRect(ClientRectangle, 8);
+            using var path = RoundRect(ClientRectangle, 6);
             using var brush = new SolidBrush(fill);
             e.Graphics.FillPath(brush, path);
 
             if (!IsPrimary)
             {
-                using var pen = new Pen(Enabled ? BorderColor : AppTheme.BgPanel);
+                using var pen = new Pen(Enabled ? BorderColor : Color.FromArgb(230, 235, 240));
                 e.Graphics.DrawPath(pen, path);
             }
 
@@ -91,7 +91,9 @@ namespace AppLauncher.Controls
                 Text,
                 Font,
                 ClientRectangle,
-                Enabled ? (IsPrimary ? Color.FromArgb(10, 30, 28) : ForeColor) : AppTheme.TextMuted,
+                Enabled
+                    ? (IsPrimary ? Color.White : ForeColor)
+                    : AppTheme.TextMuted,
                 TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
         }
 

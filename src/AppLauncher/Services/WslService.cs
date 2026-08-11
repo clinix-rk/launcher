@@ -2,6 +2,7 @@ using System;
 using System.Diagnostics;
 using System.IO;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -40,20 +41,54 @@ namespace AppLauncher.Services
             return windowsPath.Replace('\\', '/');
         }
 
-        public async Task<CommandResult> RunBashAsync(
-            string command,
+        /// <summary>
+        /// Executes a Docker-specific command, ensuring it runs with elevated root/sudo privileges.
+        /// </summary>
+        public async Task<CommandResult> RunDockerAsync(
+            string dockerCommand,
             int timeoutSeconds = 120,
             bool logCommand = true,
             bool streamOutput = true,
             CancellationToken cancellationToken = default)
         {
+            // Normalize command to ensure it starts with sudo docker if not already present
+            string normalized = dockerCommand.Trim();
+            if (!normalized.StartsWith("sudo", StringComparison.OrdinalIgnoreCase))
+            {
+                normalized = normalized.StartsWith("docker", StringComparison.OrdinalIgnoreCase)
+                    ? $"sudo {normalized}"
+                    : $"sudo docker {normalized}";
+            }
+
+            return await RunBashAsync(
+                command: normalized,
+                timeoutSeconds: timeoutSeconds,
+                logCommand: logCommand,
+                streamOutput: streamOutput,
+                runAsRoot: true, // Uses 'wsl.exe -u root' to bypass interactive password prompts entirely
+                cancellationToken: cancellationToken);
+        }
+
+        /// <summary>
+        /// Executes an arbitrary bash command inside the WSL distribution.
+        /// </summary>
+        public async Task<CommandResult> RunBashAsync(
+            string command,
+            int timeoutSeconds = 120,
+            bool logCommand = true,
+            bool streamOutput = true,
+            bool runAsRoot = false,
+            CancellationToken cancellationToken = default)
+        {
             string wslRoot = ToWslPath(_appRoot);
             string wrapped = $"cd '{EscapeSingleQuotes(wslRoot)}' && {command}";
+            string rootFlag = runAsRoot ? "-u root " : "";
+
             return await RunProcessAsync(
                 "wsl.exe",
-                $"-e bash -lc \"{EscapeForProcessArgs(wrapped)}\"",
+                $"{rootFlag}-e bash -lc \"{EscapeForProcessArgs(wrapped)}\"",
                 timeoutSeconds,
-                logCommand ? $"wsl bash: {command}" : null,
+                logCommand ? $"wsl bash{(runAsRoot ? " (root)" : "")}: {command}" : null,
                 streamOutput,
                 cancellationToken);
         }

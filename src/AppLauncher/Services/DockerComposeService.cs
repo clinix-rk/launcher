@@ -88,11 +88,29 @@ namespace AppLauncher.Services
                 cancellationToken: cancellationToken);
         }
 
-        public async Task<bool> StartAsync(CancellationToken cancellationToken = default)
+        public async Task<bool> StartAsync(
+            IProgress<ProgressStep>? progress = null,
+            CancellationToken cancellationToken = default)
         {
-            await EnsureDockerDaemonAsync(cancellationToken);
-            _log.Info("Starting Clinix services...");
+            const int total = 4;
 
+            ProgressReport.Report(progress, 1, total, "Ensuring Docker is ready");
+            await EnsureDockerDaemonAsync(cancellationToken);
+
+            ProgressReport.Report(progress, 2, total, "Downloading images (may take several minutes)");
+            _log.Info("Pulling images via docker compose (this can take several minutes)...");
+            var pull = await _wsl.RunBashAsync(
+                "docker compose pull",
+                timeoutSeconds: 600,
+                cancellationToken: cancellationToken);
+
+            if (!pull.Success)
+            {
+                _log.Warning("Image pull reported errors; continuing with docker compose up...");
+            }
+
+            ProgressReport.Report(progress, 3, total, "Starting containers");
+            _log.Info("Starting Clinix services...");
             var result = await _wsl.RunBashAsync(
                 "docker compose up -d",
                 timeoutSeconds: 300,
@@ -104,6 +122,7 @@ namespace AppLauncher.Services
                 return false;
             }
 
+            ProgressReport.Report(progress, 4, total, "Waiting for health checks");
             bool healthy = await _health.VerifyAppHealthAsync(
                 startupDelaySeconds: 5,
                 timeoutSeconds: 90,

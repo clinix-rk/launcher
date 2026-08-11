@@ -65,6 +65,12 @@ jobs:
         run: |
           Copy-Item -Path "publish/AppLauncher.exe" `
             -Destination "publish/AppLauncher-${{ steps.version.outputs.VERSION }}.exe"
+          if (-not (Test-Path "publish/docker-compose.yml")) {
+            throw "docker-compose.yml was not copied to publish output"
+          }
+          if (-not (Test-Path "publish/.env.example")) {
+            throw ".env.example was not copied to publish output"
+          }
       
       - name: Create checksums
         shell: pwsh
@@ -80,6 +86,8 @@ jobs:
           name: AppLauncher-${{ steps.version.outputs.VERSION }}
           path: |
             publish/AppLauncher-${{ steps.version.outputs.VERSION }}.exe
+            publish/docker-compose.yml
+            publish/.env.example
             publish/SHA256SUMS.txt
           retention-days: 7
           if-no-files-found: error
@@ -90,6 +98,8 @@ jobs:
         with:
           files: |
             publish/AppLauncher-${{ steps.version.outputs.VERSION }}.exe
+            publish/docker-compose.yml
+            publish/.env.example
             publish/SHA256SUMS.txt
           tag_name: ${{ github.ref_name }}
           generate_release_notes: true

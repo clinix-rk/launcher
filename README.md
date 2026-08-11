@@ -4,12 +4,13 @@ Professional Windows launcher for the Clinix stack (Lens + Forge + Postgres) run
 
 ## Features
 
-- Modern dark UI with live activity log
+- Professional light UI with step progress for long downloads and live activity log
 - First-run setup for WSL and Docker Engine inside WSL
 - Start / Stop / Open App
 - Manual and automatic update checks (prompt before apply)
 - Rollback to previous image set
 - One-click crash reports via GitHub Issues API
+- Ships `docker-compose.yml` and `.env.example` beside the EXE on build/publish
 
 ## Prerequisites
 
@@ -21,12 +22,11 @@ Docker Desktop is **not** required. The launcher installs/uses Docker Engine ins
 
 ## Quick start
 
-1. Download the latest `AppLauncher-*.exe` from Releases (or build from source).
-2. Place `docker-compose.yml` and `.env` next to the EXE (release builds copy `.env.example`).
-3. Copy `.env.example` → `.env` and set at least `POSTGRES_PASSWORD`.
-4. Run `AppLauncher.exe`.
-5. If setup is needed, click **Retry Setup** and approve elevation / Ubuntu prompts.
-6. Click **Start**, then **Open App** (`http://localhost`).
+1. Download the latest release assets (`AppLauncher-*.exe`, `docker-compose.yml`, and `.env.example`) into one folder — or build from source (both files are copied next to the EXE).
+2. Copy `.env.example` → `.env` (if missing) and set at least `POSTGRES_PASSWORD`.
+3. Run `AppLauncher.exe`.
+4. If setup is needed, click **Retry Setup** and approve elevation / Ubuntu prompts.
+5. Click **Start**, then **Open App** (`http://localhost`).
 
 ## Configuration
 
@@ -83,6 +83,8 @@ Docker Desktop is **not** required. The launcher installs/uses Docker Engine ins
 - DB backups: `db_backup_*.tar.gz` next to the EXE
 
 ## Build from source
+
+Place `docker-compose.yml` at the **repo root** (next to `.env.example`) before building. The project copies both into the output directory the same way.
 
 ```powershell
 dotnet publish -c Release -o ./publish `

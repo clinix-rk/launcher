@@ -91,39 +91,47 @@ namespace AppLauncher.Services
             };
         }
 
-        public async Task<bool> ApplyUpdateAsync(CancellationToken cancellationToken = default)
+        public async Task<bool> ApplyUpdateAsync(
+            IProgress<ProgressStep>? progress = null,
+            CancellationToken cancellationToken = default)
         {
             _compose.StopLogTail();
+            const int total = 5;
 
             try
             {
                 File.WriteAllText(_config.BackupVersionFilePath, CurrentVersion);
                 _log.Info("Backup version saved");
 
+                ProgressReport.Report(progress, 1, total, "Stopping services");
                 _log.Info("Step 1/5: Stopping services...");
                 await _compose.StopAsync(cancellationToken);
 
+                ProgressReport.Report(progress, 2, total, "Backing up database");
                 _log.Info("Step 2/5: Backing up database...");
                 await _compose.BackupDatabaseAsync(cancellationToken);
 
+                ProgressReport.Report(progress, 3, total, "Downloading images (may take several minutes)");
                 _log.Info("Step 3/5: Pulling latest images...");
                 bool pullOk = await _compose.PullAsync(cancellationToken);
                 if (!pullOk)
                 {
                     _log.Error("Image pull failed. Rolling back...");
-                    await RollbackAsync(cancellationToken);
+                    await RollbackAsync(progress: null, cancellationToken);
                     return false;
                 }
 
+                ProgressReport.Report(progress, 4, total, "Starting containers");
                 _log.Info("Step 4/5: Starting containers...");
-                var up = await _wslComposeUp(cancellationToken);
+                var up = await WslComposeUpAsync(cancellationToken);
                 if (!up)
                 {
                     _log.Error("Failed to start containers after pull. Rolling back...");
-                    await RollbackAsync(cancellationToken);
+                    await RollbackAsync(progress: null, cancellationToken);
                     return false;
                 }
 
+                ProgressReport.Report(progress, 5, total, "Verifying health");
                 _log.Info("Step 5/5: Verifying health...");
                 bool healthy = await _health.VerifyAppHealthAsync(
                     startupDelaySeconds: 8,
@@ -133,7 +141,7 @@ namespace AppLauncher.Services
                 if (!healthy)
                 {
                     _log.Error("Health checks failed. Rolling back...");
-                    await RollbackAsync(cancellationToken);
+                    await RollbackAsync(progress: null, cancellationToken);
                     return false;
                 }
 
@@ -151,8 +159,12 @@ namespace AppLauncher.Services
             }
         }
 
-        public async Task<bool> RollbackAsync(CancellationToken cancellationToken = default)
+        public async Task<bool> RollbackAsync(
+            IProgress<ProgressStep>? progress = null,
+            CancellationToken cancellationToken = default)
         {
+            const int total = 4;
+
             try
             {
                 if (!File.Exists(_config.BackupVersionFilePath))
@@ -164,8 +176,10 @@ namespace AppLauncher.Services
                 string backupVersion = File.ReadAllText(_config.BackupVersionFilePath).Trim();
                 _log.Info($"Rolling back to: {backupVersion}");
 
+                ProgressReport.Report(progress, 1, total, "Stopping services");
                 await _compose.StopAsync(cancellationToken);
 
+                ProgressReport.Report(progress, 2, total, "Downloading previous images (may take several minutes)");
                 var parts = backupVersion.Split('|');
                 if (parts.Length == 2)
                 {
@@ -189,12 +203,14 @@ namespace AppLauncher.Services
                     }
                 }
 
-                bool started = await _wslComposeUp(cancellationToken);
+                ProgressReport.Report(progress, 3, total, "Starting containers");
+                bool started = await WslComposeUpAsync(cancellationToken);
                 if (!started)
                 {
                     return false;
                 }
 
+                ProgressReport.Report(progress, 4, total, "Verifying health");
                 await _health.VerifyAppHealthAsync(startupDelaySeconds: 5, timeoutSeconds: 90, cancellationToken: cancellationToken);
 
                 CurrentVersion = backupVersion;
@@ -212,7 +228,7 @@ namespace AppLauncher.Services
 
         public bool HasBackupVersion() => File.Exists(_config.BackupVersionFilePath);
 
-        private async Task<bool> _wslComposeUp(CancellationToken cancellationToken)
+        private async Task<bool> WslComposeUpAsync(CancellationToken cancellationToken)
         {
             var result = await _wsl.RunBashAsync(
                 "docker compose up -d",

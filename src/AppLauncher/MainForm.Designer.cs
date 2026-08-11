@@ -51,6 +51,12 @@ namespace AppLauncher
             chkAutoUpdate = new CheckBox();
             lblUpdateBanner = new Label();
 
+            progressPanel = new Panel();
+            lblProgressTitle = new Label();
+            lblProgressStep = new Label();
+            lblProgressHint = new Label();
+            progressBar = new ProgressBar();
+
             logsPanel = new Panel();
             lblLogs = new Label();
             btnClearLogs = new FlatButton { Text = "Clear" };
@@ -66,8 +72,8 @@ namespace AppLauncher
             // Form
             AutoScaleDimensions = new SizeF(7F, 15F);
             AutoScaleMode = AutoScaleMode.Font;
-            ClientSize = new Size(860, 640);
-            MinimumSize = new Size(860, 640);
+            ClientSize = new Size(860, 700);
+            MinimumSize = new Size(860, 700);
             Name = "MainForm";
             Text = "Clinix Launcher";
             DoubleBuffered = true;
@@ -80,7 +86,7 @@ namespace AppLauncher
 
             lblBrand.AutoSize = true;
             lblBrand.Font = AppTheme.TitleFont;
-            lblBrand.ForeColor = AppTheme.TextPrimary;
+            lblBrand.ForeColor = AppTheme.Navy;
             lblBrand.Location = new Point(28, 22);
             lblBrand.Text = "Clinix";
             lblBrand.BackColor = Color.Transparent;
@@ -99,8 +105,8 @@ namespace AppLauncher
             lblVersion.Text = "Version: unknown";
             lblVersion.BackColor = Color.Transparent;
 
-            statusBadge.Location = new Point(680, 40);
-            statusBadge.Size = new Size(150, 28);
+            statusBadge.Location = new Point(620, 40);
+            statusBadge.Size = new Size(210, 28);
             statusBadge.Anchor = AnchorStyles.Top | AnchorStyles.Right;
 
             headerPanel.Controls.Add(lblBrand);
@@ -199,6 +205,48 @@ namespace AppLauncher
             updatesPanel.Controls.Add(chkAutoUpdate);
             updatesPanel.Controls.Add(lblUpdateBanner);
 
+            // Progress (shown during long operations)
+            progressPanel.Location = new Point(28, 352);
+            progressPanel.Size = new Size(804, 100);
+            progressPanel.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
+            progressPanel.BackColor = AppTheme.BgPanel;
+            progressPanel.Visible = false;
+            progressPanel.Paint += ProgressPanel_Paint;
+
+            lblProgressTitle.AutoSize = true;
+            lblProgressTitle.Font = AppTheme.SectionFont;
+            lblProgressTitle.ForeColor = AppTheme.Navy;
+            lblProgressTitle.Location = new Point(12, 8);
+            lblProgressTitle.Text = "Working…";
+            lblProgressTitle.BackColor = Color.Transparent;
+
+            lblProgressStep.AutoSize = false;
+            lblProgressStep.Font = AppTheme.BodyFont;
+            lblProgressStep.ForeColor = AppTheme.TextPrimary;
+            lblProgressStep.Location = new Point(12, 28);
+            lblProgressStep.Size = new Size(780, 36);
+            lblProgressStep.Text = "";
+            lblProgressStep.BackColor = Color.Transparent;
+
+            progressBar.Location = new Point(12, 70);
+            progressBar.Size = new Size(560, 16);
+            progressBar.Style = ProgressBarStyle.Continuous;
+            progressBar.Minimum = 0;
+            progressBar.Maximum = 100;
+            progressBar.Value = 0;
+
+            lblProgressHint.AutoSize = true;
+            lblProgressHint.Font = AppTheme.SmallFont;
+            lblProgressHint.ForeColor = AppTheme.TextMuted;
+            lblProgressHint.Location = new Point(580, 70);
+            lblProgressHint.Text = "This can take several minutes.";
+            lblProgressHint.BackColor = Color.Transparent;
+
+            progressPanel.Controls.Add(lblProgressTitle);
+            progressPanel.Controls.Add(lblProgressStep);
+            progressPanel.Controls.Add(progressBar);
+            progressPanel.Controls.Add(lblProgressHint);
+
             // Logs
             logsPanel.Location = new Point(28, 358);
             logsPanel.Size = new Size(804, 220);
@@ -225,7 +273,7 @@ namespace AppLauncher
             txtLogs.Size = new Size(804, 188);
             txtLogs.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
             txtLogs.ReadOnly = true;
-            txtLogs.BorderStyle = BorderStyle.None;
+            txtLogs.BorderStyle = BorderStyle.FixedSingle;
             txtLogs.BackColor = AppTheme.LogBg;
             txtLogs.ForeColor = AppTheme.LogInfo;
             txtLogs.Font = SafeMonoFont();
@@ -239,7 +287,7 @@ namespace AppLauncher
             logsPanel.Controls.Add(txtLogs);
 
             // Footer
-            footerPanel.Location = new Point(0, 590);
+            footerPanel.Location = new Point(0, 650);
             footerPanel.Size = new Size(860, 50);
             footerPanel.Dock = DockStyle.Bottom;
             footerPanel.BackColor = AppTheme.BgPanel;
@@ -260,6 +308,7 @@ namespace AppLauncher
             footerPanel.Controls.Add(lblFooter);
 
             Controls.Add(logsPanel);
+            Controls.Add(progressPanel);
             Controls.Add(updatesPanel);
             Controls.Add(actionsPanel);
             Controls.Add(servicesPanel);
@@ -315,6 +364,12 @@ namespace AppLauncher
         private FlatButton btnRollback = null!;
         private CheckBox chkAutoUpdate = null!;
         private Label lblUpdateBanner = null!;
+
+        private Panel progressPanel = null!;
+        private Label lblProgressTitle = null!;
+        private Label lblProgressStep = null!;
+        private Label lblProgressHint = null!;
+        private ProgressBar progressBar = null!;
 
         private Panel logsPanel = null!;
         private Label lblLogs = null!;

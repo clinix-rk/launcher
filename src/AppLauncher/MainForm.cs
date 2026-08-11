@@ -1,6 +1,7 @@
 using System;
 using System.Diagnostics;
 using System.Drawing;
+using System.Drawing.Drawing2D;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using AppLauncher.Services;
@@ -24,6 +25,8 @@ namespace AppLauncher
         private bool _busy;
         private bool _setupReady;
         private bool _updateAvailable;
+        private string[] _progressStepLabels = Array.Empty<string>();
+        private string _progressOperationTitle = "";
 
         public MainForm()
         {
@@ -81,6 +84,16 @@ namespace AppLauncher
             e.Graphics.DrawLine(pen, 0, 0, footerPanel.Width, 0);
         }
 
+        private void ProgressPanel_Paint(object? sender, PaintEventArgs e)
+        {
+            e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+            var bounds = progressPanel.ClientRectangle;
+            using var fill = new SolidBrush(AppTheme.BgPanel);
+            e.Graphics.FillRectangle(fill, bounds);
+            using var pen = new Pen(AppTheme.Border);
+            e.Graphics.DrawRectangle(pen, 0, 0, bounds.Width - 1, bounds.Height - 1);
+        }
+
         private void MainForm_Resize(object? sender, EventArgs e) => LayoutResponsive();
 
         private void LayoutResponsive()
@@ -89,10 +102,18 @@ namespace AppLauncher
             servicesPanel.Width = contentWidth;
             actionsPanel.Width = contentWidth;
             updatesPanel.Width = contentWidth;
+            progressPanel.Width = contentWidth;
+
+            int logsTop = progressPanel.Visible ? progressPanel.Bottom + 12 : updatesPanel.Bottom + 12;
+            logsPanel.Top = logsTop;
             logsPanel.Width = contentWidth;
             logsPanel.Height = Math.Max(160, ClientSize.Height - logsPanel.Top - footerPanel.Height - 16);
             txtLogs.Width = contentWidth;
             txtLogs.Height = Math.Max(120, logsPanel.Height - 32);
+
+            progressBar.Width = Math.Max(200, contentWidth - 240);
+            lblProgressHint.Left = progressBar.Right + 12;
+            lblProgressStep.Width = Math.Max(200, contentWidth - 24);
 
             int pillWidth = Math.Max(180, (contentWidth - 40) / 3);
             pillPostgres.Width = pillWidth;
@@ -140,10 +161,119 @@ namespace AppLauncher
             }
         }
 
-        private async Task RunSetupAsync(bool repair)
+        private IProgress<ProgressStep> CreateProgress(string operationTitle, string[] stepLabels)
+        {
+            _progressOperationTitle = operationTitle;
+            _progressStepLabels = stepLabels;
+            return new Progress<ProgressStep>(OnProgressStep);
+        }
+
+        private void OnProgressStep(ProgressStep step)
+        {
+            if (IsDisposed) return;
+
+            void Apply()
+            {
+                ShowProgressPanel(true);
+                lblProgressTitle.Text = _progressOperationTitle;
+
+                string checklist = BuildChecklist(step.Step, step.Total, step.Message);
+                lblProgressStep.Text = checklist;
+
+                int pct = step.Total <= 0
+                    ? 0
+                    : Math.Clamp((int)Math.Round(100.0 * step.Step / step.Total), 0, 100);
+                if (progressBar.Style != ProgressBarStyle.Continuous)
+                {
+                    progressBar.Style = ProgressBarStyle.Continuous;
+                }
+
+                progressBar.Value = pct;
+
+                bool downloading = step.Message.Contains("download", StringComparison.OrdinalIgnoreCase)
+                    || step.Message.Contains("Pull", StringComparison.OrdinalIgnoreCase)
+                    || step.Message.Contains("image", StringComparison.OrdinalIgnoreCase);
+                lblProgressHint.Text = downloading
+                    ? "Image download can take several minutes."
+                    : "Please wait…";
+
+                string badge = step.Total > 0
+                    ? $"{Truncate(step.Message, 28)} ({step.Step}/{step.Total})"
+                    : Truncate(step.Message, 36);
+                SetOverallStatus(badge, AppTheme.Warning);
+                LayoutResponsive();
+            }
+
+            if (InvokeRequired) BeginInvoke(Apply);
+            else Apply();
+        }
+
+        private string BuildChecklist(int current, int total, string currentMessage)
+        {
+            if (_progressStepLabels.Length == 0)
+            {
+                return total > 0
+                    ? $"Step {current}/{total}: {currentMessage}"
+                    : currentMessage;
+            }
+
+            var lines = new System.Text.StringBuilder();
+            lines.AppendLine($"Step {current} of {total}: {currentMessage}");
+
+            int count = Math.Min(total, _progressStepLabels.Length);
+            for (int i = 0; i < count; i++)
+            {
+                int stepNum = i + 1;
+                string marker = stepNum < current ? "[done]" : stepNum == current ? "[now]" : "[    ]";
+                if (i > 0) lines.Append("  ");
+                lines.Append($"{marker} {stepNum}.{_progressStepLabels[i]}");
+            }
+
+            return lines.ToString().TrimEnd();
+        }
+
+        private static string Truncate(string text, int max)
+        {
+            if (string.IsNullOrEmpty(text) || text.Length <= max) return text;
+            return text[..(max - 1)] + "…";
+        }
+
+        private void ShowProgressPanel(bool visible)
+        {
+            if (progressPanel.Visible == visible) return;
+            progressPanel.Visible = visible;
+            LayoutResponsive();
+        }
+
+        private void BeginOperation(string title, string[] steps)
         {
             SetBusy(true);
+            _progressOperationTitle = title;
+            _progressStepLabels = steps;
+            lblProgressTitle.Text = title;
+            lblProgressStep.Text = steps.Length > 0 ? $"→ 1. {steps[0]}" : "";
+            progressBar.Style = ProgressBarStyle.Continuous;
+            progressBar.Value = 0;
+            lblProgressHint.Text = "This can take several minutes.";
+            ShowProgressPanel(true);
+        }
+
+        private void EndOperation()
+        {
+            ShowProgressPanel(false);
+            SetBusy(false);
+        }
+
+        private async Task RunSetupAsync(bool repair)
+        {
+            string title = repair ? "Repairing setup" : "Checking environment";
+            string[] steps = repair
+                ? new[] { "Assess environment", "Install or fix gap", "Re-check environment" }
+                : new[] { "Check prerequisites", "Check WSL", "Check Docker" };
+
+            BeginOperation(title, steps);
             SetOverallStatus(repair ? "Repairing" : "Checking", AppTheme.Warning);
+            var progress = CreateProgress(title, steps);
 
             try
             {
@@ -151,15 +281,15 @@ namespace AppLauncher
                 _config.Load();
 
                 SetupResult result = repair
-                    ? await _setup.RepairAsync()
-                    : await _setup.AssessAsync();
+                    ? await _setup.RepairAsync(progress)
+                    : await _setup.AssessAsync(progress);
 
                 // Multi-step repair: keep repairing while actionable.
                 int guard = 0;
                 while (repair && !result.IsReady && result.State != SetupState.Failed && result.State != SetupState.NeedsComposeFile && guard < 4)
                 {
                     guard++;
-                    result = await _setup.RepairAsync();
+                    result = await _setup.RepairAsync(progress);
                 }
 
                 _setupReady = result.IsReady;
@@ -185,7 +315,7 @@ namespace AppLauncher
             }
             finally
             {
-                SetBusy(false);
+                EndOperation();
                 UpdateActionStates();
             }
         }
@@ -204,16 +334,28 @@ namespace AppLauncher
         private async void BtnStart_Click(object? sender, EventArgs e)
         {
             if (!_setupReady || _busy) return;
-            SetBusy(true);
+
+            string title = "Starting services";
+            string[] steps =
+            {
+                "Ensure Docker is ready",
+                "Download images",
+                "Start containers",
+                "Wait for health checks"
+            };
+
+            BeginOperation(title, steps);
             SetOverallStatus("Starting", AppTheme.Warning);
+            var progress = CreateProgress(title, steps);
+
             try
             {
-                bool ok = await _compose.StartAsync();
+                bool ok = await _compose.StartAsync(progress);
                 SetOverallStatus(ok ? "Running" : "Degraded", ok ? AppTheme.Success : AppTheme.Danger);
             }
             finally
             {
-                SetBusy(false);
+                EndOperation();
                 await RefreshStatusAsync();
             }
         }
@@ -263,11 +405,23 @@ namespace AppLauncher
 
         private async Task RunUpdateAsync()
         {
-            SetBusy(true);
+            string title = "Updating";
+            string[] steps =
+            {
+                "Stop services",
+                "Backup database",
+                "Download images",
+                "Start containers",
+                "Verify health"
+            };
+
+            BeginOperation(title, steps);
             SetOverallStatus("Updating", AppTheme.Warning);
+            var progress = CreateProgress(title, steps);
+
             try
             {
-                bool ok = await _updates.ApplyUpdateAsync();
+                bool ok = await _updates.ApplyUpdateAsync(progress);
                 lblVersion.Text = $"Version: {_updates.CurrentVersion}";
                 btnRollback.Enabled = _updates.HasBackupVersion();
                 _updateAvailable = !ok;
@@ -286,7 +440,7 @@ namespace AppLauncher
             }
             finally
             {
-                SetBusy(false);
+                EndOperation();
                 await RefreshStatusAsync();
             }
         }
@@ -304,11 +458,22 @@ namespace AppLauncher
 
             if (confirm != DialogResult.Yes) return;
 
-            SetBusy(true);
+            string title = "Rolling back";
+            string[] steps =
+            {
+                "Stop services",
+                "Download previous images",
+                "Start containers",
+                "Verify health"
+            };
+
+            BeginOperation(title, steps);
             SetOverallStatus("Rolling back", AppTheme.Warning);
+            var progress = CreateProgress(title, steps);
+
             try
             {
-                bool ok = await _updates.RollbackAsync();
+                bool ok = await _updates.RollbackAsync(progress);
                 lblVersion.Text = $"Version: {_updates.CurrentVersion}";
                 SetOverallStatus(ok ? "Running" : "Rollback failed", ok ? AppTheme.Success : AppTheme.Danger);
                 MessageBox.Show(
@@ -320,7 +485,7 @@ namespace AppLauncher
             }
             finally
             {
-                SetBusy(false);
+                EndOperation();
                 await RefreshStatusAsync();
             }
         }

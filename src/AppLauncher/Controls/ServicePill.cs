@@ -36,8 +36,8 @@ namespace AppLauncher.Controls
         {
             e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
 
-            using var path = RoundRect(ClientRectangle, 10);
-            using var bg = new SolidBrush(AppTheme.BgElevated);
+            using var path = RoundRect(ClientRectangle, 8);
+            using var bg = new SolidBrush(AppTheme.BgPanel);
             e.Graphics.FillPath(bg, path);
             using var border = new Pen(AppTheme.Border);
             e.Graphics.DrawPath(border, path);
