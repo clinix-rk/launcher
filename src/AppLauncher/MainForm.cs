@@ -1,552 +1,527 @@
 using System;
-using System.Collections.Generic;
 using System.Diagnostics;
-using System.IO;
-using System.Net.Http;
-using System.Text;
+using System.Drawing;
 using System.Threading.Tasks;
 using System.Windows.Forms;
-using DotNetEnv;
+using AppLauncher.Services;
+using AppLauncher.Theme;
 
 namespace AppLauncher
 {
     public partial class MainForm : Form
     {
-        private const string BRANCH = "release";
-        private const string APP_URL = "http://localhost";
-        private const int HEALTH_CHECK_TIMEOUT_SEC = 30;
-        private const int CONTAINER_STARTUP_DELAY_SEC = 5;
-        
-        private readonly string appRoot = AppDomain.CurrentDomain.BaseDirectory;
-        private readonly string versionFile;
-        private readonly string backupVersionFile;
-        private readonly string logFile;
-        private readonly string envFilePath;
+        private readonly AppConfig _config;
+        private readonly LogService _log = null!;
+        private readonly WslService _wsl = null!;
+        private readonly HealthCheckService _health = null!;
+        private readonly DockerComposeService _compose = null!;
+        private readonly SetupService _setup = null!;
+        private readonly UpdateService _updates = null!;
+        private readonly CrashReportService _crash = null!;
 
-        private string currentVersion = "unknown";
-        private string lensRemoteTag = "";
-        private string forgeRemoteTag = "";
+        private System.Windows.Forms.Timer? _statusTimer;
+        private System.Windows.Forms.Timer? _autoUpdateTimer;
+        private bool _busy;
+        private bool _setupReady;
+        private bool _updateAvailable;
 
         public MainForm()
         {
+            _config = new AppConfig();
+            _config.Load();
+
+            _log = new LogService(_config.LogFilePath);
+            _wsl = new WslService(_config.AppRoot, _log);
+            _health = new HealthCheckService(_config, _log);
+            _compose = new DockerComposeService(_config, _wsl, _health, _log);
+            _setup = new SetupService(_config, _wsl, _compose, _log);
+            _updates = new UpdateService(_config, _wsl, _compose, _health, _log);
+            _crash = new CrashReportService(_config, _log, _wsl, _compose, _updates);
+
             InitializeComponent();
-            
-            versionFile = Path.Combine(appRoot, "current_version.txt");
-            backupVersionFile = Path.Combine(appRoot, "backup_version.txt");
-            logFile = Path.Combine(appRoot, "launcher.log");
-            envFilePath = Path.Combine(appRoot, ".env");
+            AppTheme.ApplyFormChrome(this);
+            Paint += MainForm_Paint;
         }
 
-        private async void MainForm_Load(object sender, EventArgs e)
+        private async void MainForm_Load(object? sender, EventArgs e)
         {
-            LoadEnvironmentVariables();
-            LoadCurrentVersion();
-            lblCurrentVersion.Text = $"Current Version: {currentVersion}";
-            LogMessage("Launcher started");
-            await CheckForUpdatesAsync();
-        }
+            _log.LogAppended += OnLogAppended;
+            chkAutoUpdate.Checked = _config.AutoUpdateEnabled;
+            lblVersion.Text = $"Version: {_updates.CurrentVersion}";
+            btnRollback.Enabled = _updates.HasBackupVersion();
+            SetOverallStatus("Checking", AppTheme.Warning);
+            LayoutResponsive();
 
-        private void LoadEnvironmentVariables()
-        {
-            if (File.Exists(envFilePath))
+            _log.Info("Clinix Launcher started");
+            await RunSetupAsync(repair: false);
+
+            if (_setupReady)
             {
-                try
+                await RefreshStatusAsync();
+                await SafeCheckUpdatesAsync(promptIfAvailable: false);
+                StartTimers();
+            }
+        }
+
+        private void MainForm_Paint(object? sender, PaintEventArgs e)
+        {
+            e.Graphics.Clear(AppTheme.BgDeep);
+        }
+
+        private void HeaderPanel_Paint(object? sender, PaintEventArgs e)
+        {
+            AppTheme.PaintHeaderGradient(e.Graphics, headerPanel.ClientRectangle);
+        }
+
+        private void FooterPanel_Paint(object? sender, PaintEventArgs e)
+        {
+            using var brush = new SolidBrush(AppTheme.BgPanel);
+            e.Graphics.FillRectangle(brush, footerPanel.ClientRectangle);
+            using var pen = new Pen(AppTheme.Border);
+            e.Graphics.DrawLine(pen, 0, 0, footerPanel.Width, 0);
+        }
+
+        private void MainForm_Resize(object? sender, EventArgs e) => LayoutResponsive();
+
+        private void LayoutResponsive()
+        {
+            int contentWidth = Math.Max(640, ClientSize.Width - 56);
+            servicesPanel.Width = contentWidth;
+            actionsPanel.Width = contentWidth;
+            updatesPanel.Width = contentWidth;
+            logsPanel.Width = contentWidth;
+            logsPanel.Height = Math.Max(160, ClientSize.Height - logsPanel.Top - footerPanel.Height - 16);
+            txtLogs.Width = contentWidth;
+            txtLogs.Height = Math.Max(120, logsPanel.Height - 32);
+
+            int pillWidth = Math.Max(180, (contentWidth - 40) / 3);
+            pillPostgres.Width = pillWidth;
+            pillForge.Width = pillWidth;
+            pillLens.Width = pillWidth;
+            pillForge.Left = pillWidth + 20;
+            pillLens.Left = (pillWidth + 20) * 2;
+
+            statusBadge.Left = Math.Max(400, headerPanel.Width - statusBadge.Width - 28);
+            btnClearLogs.Left = contentWidth - 120;
+            btnCopyLogs.Left = contentWidth - 58;
+        }
+
+        private void OnLogAppended(LogEntry entry)
+        {
+            if (IsDisposed) return;
+
+            void Append()
+            {
+                Color color = entry.Level switch
                 {
-                    Env.Load(envFilePath);
-                    LogMessage(".env file loaded successfully");
-                }
-                catch (Exception ex)
-                {
-                    LogMessage($"Warning: Failed to load .env file: {ex.Message}");
-                }
+                    LogLevel.Success => AppTheme.LogSuccess,
+                    LogLevel.Warning => AppTheme.LogWarning,
+                    LogLevel.Error => AppTheme.LogError,
+                    LogLevel.Command => AppTheme.LogCommand,
+                    _ => AppTheme.LogInfo
+                };
+
+                txtLogs.SelectionStart = txtLogs.TextLength;
+                txtLogs.SelectionLength = 0;
+                txtLogs.SelectionColor = color;
+                txtLogs.AppendText(entry + Environment.NewLine);
+                txtLogs.SelectionStart = txtLogs.TextLength;
+                txtLogs.ScrollToCaret();
+            }
+
+            if (txtLogs.InvokeRequired)
+            {
+                try { txtLogs.BeginInvoke(Append); }
+                catch { /* Form closing */ }
             }
             else
             {
-                LogMessage("Warning: .env file not found. Using defaults or system environment variables.");
+                Append();
             }
         }
 
-        private void LoadCurrentVersion()
+        private async Task RunSetupAsync(bool repair)
         {
-            if (File.Exists(versionFile))
-            {
-                currentVersion = File.ReadAllText(versionFile).Trim();
-            }
-        }
-
-        private void LogMessage(string message)
-        {
-            string timestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
-            string logEntry = $"[{timestamp}] {message}";
-            
-            try
-            {
-                File.AppendAllText(logFile, logEntry + Environment.NewLine);
-            }
-            catch { /* Silently fail if log write fails */ }
-            
-            lblStatus.Text = message;
-        }
-
-        private async void btnCheckUpdate_Click(object sender, EventArgs e)
-        {
-            await CheckForUpdatesAsync();
-        }
-
-        private async Task CheckForUpdatesAsync()
-        {
-            LogMessage("Checking for updates from GitHub Container Registry...");
-            btnUpdate.Enabled = false;
+            SetBusy(true);
+            SetOverallStatus(repair ? "Repairing" : "Checking", AppTheme.Warning);
 
             try
             {
-                bool updateAvailable = await Task.Run(async () =>
+                _setup.EnsureEnvFile();
+                _config.Load();
+
+                SetupResult result = repair
+                    ? await _setup.RepairAsync()
+                    : await _setup.AssessAsync();
+
+                // Multi-step repair: keep repairing while actionable.
+                int guard = 0;
+                while (repair && !result.IsReady && result.State != SetupState.Failed && result.State != SetupState.NeedsComposeFile && guard < 4)
                 {
-                    // Fetch latest tags from GHCR
-                    lensRemoteTag = await GetLatestGhcrTag("lens");
-                    forgeRemoteTag = await GetLatestGhcrTag("forge");
+                    guard++;
+                    result = await _setup.RepairAsync();
+                }
 
-                    if (string.IsNullOrEmpty(lensRemoteTag) || string.IsNullOrEmpty(forgeRemoteTag))
-                    {
-                        LogMessage("Failed to fetch remote tags from GHCR");
-                        return false;
-                    }
+                _setupReady = result.IsReady;
+                btnRetrySetup.Visible = !_setupReady;
 
-                    string remoteVersion = $"lens:{lensRemoteTag}|forge:{forgeRemoteTag}";
-                    bool updateAvailable = currentVersion != remoteVersion;
-
-                    if (updateAvailable)
-                    {
-                        LogMessage($"Updates available - Lens: {lensRemoteTag}, Forge: {forgeRemoteTag}");
-                    }
-
-                    return updateAvailable;
-                });
-
-                if (updateAvailable)
+                if (_setupReady)
                 {
-                    LogMessage("Click 'Update' to deploy the latest versions");
-                    btnUpdate.Enabled = true;
+                    SetOverallStatus("Ready", AppTheme.Success);
+                    _log.Success(result.Message);
                 }
                 else
                 {
-                    LogMessage("All services are up to date");
+                    SetOverallStatus("Setup needed", AppTheme.Warning);
+                    _log.Warning(result.Message);
                 }
             }
             catch (Exception ex)
             {
-                LogMessage($"Error checking updates: {ex.Message}");
+                _setupReady = false;
+                btnRetrySetup.Visible = true;
+                SetOverallStatus("Setup failed", AppTheme.Danger);
+                _log.Error(ex.Message);
+            }
+            finally
+            {
+                SetBusy(false);
+                UpdateActionStates();
             }
         }
 
-        private async Task<string> GetLatestGhcrTag(string serviceName)
+        private async void BtnRetrySetup_Click(object? sender, EventArgs e)
         {
+            await RunSetupAsync(repair: true);
+            if (_setupReady)
+            {
+                await RefreshStatusAsync();
+                await SafeCheckUpdatesAsync(promptIfAvailable: false);
+                StartTimers();
+            }
+        }
+
+        private async void BtnStart_Click(object? sender, EventArgs e)
+        {
+            if (!_setupReady || _busy) return;
+            SetBusy(true);
+            SetOverallStatus("Starting", AppTheme.Warning);
             try
             {
-                using (HttpClient client = new HttpClient())
-                {
-                    // Try to fetch latest tag from image
-                    string apiUrl = $"https://ghcr.io/v2/{GetOrgFromRegistry()}/{serviceName}/tags/list";
-
-                    var request = new HttpRequestMessage(HttpMethod.Get, apiUrl);
-                    request.Headers.Add("Accept", "application/json");
-
-                    var response = await client.SendAsync(request);
-
-                    if (response.IsSuccessStatusCode)
-                    {
-                        string content = await response.Content.ReadAsStringAsync();
-
-                        // Parse JSON response to get tags
-                        // Example response: {"name":"forge","tags":["latest","v1.0.0","abc1234"]}
-                        if (content.Contains("\"latest\""))
-                        {
-                            // If "latest" tag exists, use it (updated most recently)
-                            return "latest";
-                        }
-
-                        // Fallback: extract all tags and find most recent
-                        var tags = ExtractTagsFromJson(content);
-                        if (tags.Count > 0)
-                        {
-                            // Return first tag (should be latest if sorted by API)
-                            return tags[0];
-                        }
-                    }
-                    else if (response.StatusCode == System.Net.HttpStatusCode.Unauthorized)
-                    {
-                        LogMessage($"Warning: No authentication for GHCR. Using 'latest' tag.");
-                        return "latest";
-                    }
-                }
+                bool ok = await _compose.StartAsync();
+                SetOverallStatus(ok ? "Running" : "Degraded", ok ? AppTheme.Success : AppTheme.Danger);
             }
-            catch (Exception ex)
+            finally
             {
-                LogMessage($"Failed to fetch tag for {serviceName}: {ex.Message}. Using 'latest'");
+                SetBusy(false);
+                await RefreshStatusAsync();
             }
-
-            return "latest"; // Default fallback
         }
 
-        private string GetOrgFromRegistry()
+        private async void BtnStop_Click(object? sender, EventArgs e)
         {
-            return "clinix-rk";
-        }
-        
-        private List<string> ExtractTagsFromJson(string json)
-        {
-            var tags = new List<string>();
+            if (!_setupReady || _busy) return;
+            SetBusy(true);
+            SetOverallStatus("Stopping", AppTheme.Warning);
             try
             {
-                // Simple JSON parsing for tags array
-                int tagsIndex = json.IndexOf("\"tags\":[");
-                if (tagsIndex > 0)
-                {
-                    int start = tagsIndex + 8;
-                    int end = json.IndexOf("]", start);
-                    string tagsString = json.Substring(start, end - start);
-                    
-                    foreach (var tag in tagsString.Split(','))
-                    {
-                        string cleanTag = tag.Trim().Trim('"');
-                        if (!string.IsNullOrEmpty(cleanTag) && cleanTag != "null")
-                        {
-                            tags.Add(cleanTag);
-                        }
-                    }
-                }
+                await _compose.StopAsync();
+                SetOverallStatus("Stopped", AppTheme.TextMuted);
             }
-            catch { /* Silently fail */ }
-            
-            return tags;
+            finally
+            {
+                SetBusy(false);
+                await RefreshStatusAsync();
+            }
         }
 
-        private async void btnUpdate_Click(object sender, EventArgs e)
+        private async void BtnOpen_Click(object? sender, EventArgs e)
         {
-            DialogResult confirm = MessageBox.Show(
-                $"Update to:\n- Lens: {lensRemoteTag}\n- Forge: {forgeRemoteTag}\n\nContinue?",
+            await _compose.OpenAppAsync();
+        }
+
+        private async void BtnCheckUpdate_Click(object? sender, EventArgs e)
+        {
+            await SafeCheckUpdatesAsync(promptIfAvailable: true);
+        }
+
+        private async void BtnUpdate_Click(object? sender, EventArgs e)
+        {
+            if (!_setupReady || _busy || !_updateAvailable) return;
+
+            var confirm = MessageBox.Show(
+                this,
+                $"Update to:\n- Lens: {_updates.LensRemoteTag}\n- Forge: {_updates.ForgeRemoteTag}\n\nServices will restart. Continue?",
                 "Confirm Update",
                 MessageBoxButtons.YesNo,
-                MessageBoxIcon.Warning
-            );
+                MessageBoxIcon.Question);
 
             if (confirm != DialogResult.Yes) return;
 
-            btnUpdate.Enabled = false;
-            btnStartApp.Enabled = false;
-            btnRollback.Enabled = false;
+            await RunUpdateAsync();
+        }
 
+        private async Task RunUpdateAsync()
+        {
+            SetBusy(true);
+            SetOverallStatus("Updating", AppTheme.Warning);
             try
             {
-                // Save current version for rollback
-                File.WriteAllText(backupVersionFile, currentVersion);
-                LogMessage("Backup version saved");
+                bool ok = await _updates.ApplyUpdateAsync();
+                lblVersion.Text = $"Version: {_updates.CurrentVersion}";
+                btnRollback.Enabled = _updates.HasBackupVersion();
+                _updateAvailable = !ok;
+                btnUpdate.Enabled = _updateAvailable;
+                lblUpdateBanner.Text = ok ? "" : "Update failed — see log";
+                SetOverallStatus(ok ? "Running" : "Update failed", ok ? AppTheme.Success : AppTheme.Danger);
 
-                LogMessage("Step 1/5: Stopping services...");
-                await Task.Run(() => RunWslCommand("docker compose down"));
-
-                LogMessage("Step 2/5: Backing up database...");
-                await BackupDatabase();
-
-                LogMessage("Step 3/5: Pulling latest images from GHCR...");
-                bool pullSuccess = await PullLatestImages();
-                if (!pullSuccess)
+                if (ok)
                 {
-                    LogMessage("Failed to pull images. Rolling back...");
-                    await RollbackToPreviousVersion();
-                    MessageBox.Show("Image pull failed. Rolled back to previous version.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                    return;
+                    MessageBox.Show(this, "Update completed successfully.", "Clinix", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 }
-
-                LogMessage("Step 4/5: Starting containers...");
-                await Task.Run(() => RunWslCommand("docker compose up -d"));
-
-                LogMessage("Step 5/5: Verifying health...");
-                bool isHealthy = await VerifyAppHealthAsync();
-
-                if (!isHealthy)
+                else
                 {
-                    LogMessage("Health check failed. Rolling back...");
-                    await RollbackToPreviousVersion();
-                    MessageBox.Show("Health checks failed. Rolled back to previous version.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                    return;
+                    MessageBox.Show(this, "Update failed. Check the activity log or send a crash report.", "Clinix", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 }
-
-                // Record successful update
-                string newVersion = $"lens:{lensRemoteTag}|forge:{forgeRemoteTag}";
-                File.WriteAllText(versionFile, newVersion);
-                currentVersion = newVersion;
-                lblCurrentVersion.Text = $"Current Version: {currentVersion}";
-
-                LogMessage($"✓ Update complete. Running Lens: {lensRemoteTag}, Forge: {forgeRemoteTag}");
-                btnStartApp.Enabled = true;
-                btnRollback.Enabled = true;
-                MessageBox.Show($"Successfully updated!\nLens: {lensRemoteTag}\nForge: {forgeRemoteTag}", "Success", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
-            catch (Exception ex)
+            finally
             {
-                LogMessage($"Critical error during update: {ex.Message}");
-                MessageBox.Show($"Update failed:\n\n{ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                SetBusy(false);
+                await RefreshStatusAsync();
             }
         }
 
-        private async Task<bool> PullLatestImages()
+        private async void BtnRollback_Click(object? sender, EventArgs e)
         {
-            try
-            {
-                // Pull Lens image
-                string lensImage = $"ghcr.io/YOUR_ORG/lens:{lensRemoteTag}";
-                string pullLensCmd = $"docker pull {lensImage}";
-                await RunWslCommandWithTimeoutAsync(pullLensCmd, timeoutSeconds: 300);
+            if (!_setupReady || _busy || !_updates.HasBackupVersion()) return;
 
-                // Pull Forge image
-                string forgeImage = $"ghcr.io/YOUR_ORG/forge:{forgeRemoteTag}";
-                string pullForgeCmd = $"docker pull {forgeImage}";
-                await RunWslCommandWithTimeoutAsync(pullForgeCmd, timeoutSeconds: 300);
-
-                return true;
-            }
-            catch (Exception ex)
-            {
-                LogMessage($"Image pull failed: {ex.Message}");
-                return false;
-            }
-        }
-
-        private async Task BackupDatabase()
-        {
-            try
-            {
-                string timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
-                string backupCommand = $"docker run --rm -v postgres_data:/data -v {appRoot}:/backup " +
-                    $"alpine tar czf /backup/db_backup_{timestamp}.tar.gz /data";
-
-                await Task.Run(() => RunWslCommand(backupCommand));
-                LogMessage($"Database backed up to db_backup_{timestamp}.tar.gz");
-            }
-            catch (Exception ex)
-            {
-                LogMessage($"Database backup warning: {ex.Message}");
-            }
-        }
-
-        private async Task<bool> VerifyAppHealthAsync()
-        {
-            await Task.Delay(CONTAINER_STARTUP_DELAY_SEC * 1000);
-
-            using (HttpClient client = new HttpClient())
-            {
-                client.Timeout = TimeSpan.FromSeconds(HEALTH_CHECK_TIMEOUT_SEC);
-                
-                try
-                {
-                    // Check Forge (Backend)
-                    LogMessage("Checking backend health...");
-                    var forgeResponse = await client.GetAsync($"{APP_URL}/api/health");
-                    if (!forgeResponse.IsSuccessStatusCode)
-                    {
-                        LogMessage("Backend health check failed");
-                        return false;
-                    }
-
-                    // Check Lens (Frontend)
-                    LogMessage("Checking frontend health...");
-                    var lensResponse = await client.GetAsync($"{APP_URL}/");
-                    if (!lensResponse.IsSuccessStatusCode)
-                    {
-                        LogMessage("Frontend health check failed");
-                        return false;
-                    }
-
-                    LogMessage("✓ All health checks passed");
-                    return true;
-                }
-                catch (Exception ex)
-                {
-                    LogMessage($"Health check exception: {ex.Message}");
-                    return false;
-                }
-            }
-        }
-
-        private async Task RollbackToPreviousVersion()
-        {
-            try
-            {
-                if (!File.Exists(backupVersionFile))
-                {
-                    LogMessage("No backup version found");
-                    return;
-                }
-
-                string backupVersion = File.ReadAllText(backupVersionFile).Trim();
-                LogMessage($"Rolling back to: {backupVersion}");
-
-                await Task.Run(() =>
-                {
-                    RunWslCommand("docker compose down");
-                });
-
-                // Extract image tags from backup version
-                var parts = backupVersion.Split('|');
-                if (parts.Length == 2)
-                {
-                    string lensTag = parts[0].Replace("lens:", "");
-                    string forgeTag = parts[1].Replace("forge:", "");
-
-                    string pullCmd = $"docker pull ghcr.io/YOUR_ORG/lens:{lensTag} && " +
-                                    $"docker pull ghcr.io/YOUR_ORG/forge:{forgeTag}";
-                    await RunWslCommandWithTimeoutAsync(pullCmd, timeoutSeconds: 300);
-
-                    await Task.Run(() => RunWslCommand("docker compose up -d"));
-                }
-
-                await Task.Delay(CONTAINER_STARTUP_DELAY_SEC * 1000);
-                await VerifyAppHealthAsync();
-                LogMessage("✓ Rollback complete");
-            }
-            catch (Exception ex)
-            {
-                LogMessage($"Rollback failed: {ex.Message}. Manual intervention required.");
-            }
-        }
-
-        private async void btnRollback_Click(object sender, EventArgs e)
-        {
-            DialogResult confirm = MessageBox.Show(
-                "Rollback to previous version?",
+            var confirm = MessageBox.Show(
+                this,
+                "Rollback to the previous version?",
                 "Confirm Rollback",
                 MessageBoxButtons.YesNo,
-                MessageBoxIcon.Warning
-            );
+                MessageBoxIcon.Warning);
 
             if (confirm != DialogResult.Yes) return;
 
-            if (File.Exists(backupVersionFile))
+            SetBusy(true);
+            SetOverallStatus("Rolling back", AppTheme.Warning);
+            try
             {
-                LogMessage("Initiating rollback...");
-                btnRollback.Enabled = false;
-                btnUpdate.Enabled = false;
-                btnStartApp.Enabled = false;
-
-                await RollbackToPreviousVersion();
-
-                string backupVersion = File.ReadAllText(backupVersionFile).Trim();
-                currentVersion = backupVersion;
-                lblCurrentVersion.Text = $"Current Version: {currentVersion}";
-
-                btnStartApp.Enabled = true;
-                btnRollback.Enabled = true;
-                MessageBox.Show("Rollback complete.", "Success", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                bool ok = await _updates.RollbackAsync();
+                lblVersion.Text = $"Version: {_updates.CurrentVersion}";
+                SetOverallStatus(ok ? "Running" : "Rollback failed", ok ? AppTheme.Success : AppTheme.Danger);
+                MessageBox.Show(
+                    this,
+                    ok ? "Rollback complete." : "Rollback failed. See the activity log.",
+                    "Clinix",
+                    MessageBoxButtons.OK,
+                    ok ? MessageBoxIcon.Information : MessageBoxIcon.Error);
             }
-            else
+            finally
             {
-                MessageBox.Show("No previous version found for rollback.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                SetBusy(false);
+                await RefreshStatusAsync();
             }
         }
 
-        private async void btnStartApp_Click(object sender, EventArgs e)
+        private async void BtnCrashReport_Click(object? sender, EventArgs e)
         {
-            LogMessage("Ensuring containers are running...");
-
-            await Task.Run(() => RunWslCommand("docker compose up -d"));
-            await Task.Delay(3000);
-
-            bool isHealthy = await VerifyAppHealthAsync();
-            if (!isHealthy)
+            if (_busy) return;
+            SetBusy(true);
+            try
             {
-                MessageBox.Show("Application failed to start. Check Docker logs.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                LogMessage("Application startup health check failed");
-                return;
-            }
-
-            LogMessage("Opening application in browser...");
-            Process.Start(new ProcessStartInfo
-            {
-                FileName = APP_URL,
-                UseShellExecute = true
-            });
-
-            LogMessage($"✓ Application running at {APP_URL}");
-        }
-
-        private async Task<bool> RunWslCommandWithTimeoutAsync(string command, int timeoutSeconds)
-        {
-            return await Task.Run(() =>
-            {
-                try
+                var result = await _crash.SendAsync();
+                if (result.Success)
                 {
-                    ProcessStartInfo psi = new ProcessStartInfo
+                    var open = MessageBox.Show(
+                        this,
+                        result.IssueUrl != null
+                            ? $"Crash report submitted.\n\nOpen issue?\n{result.IssueUrl}"
+                            : "Crash report submitted.",
+                        "Clinix",
+                        MessageBoxButtons.YesNo,
+                        MessageBoxIcon.Information);
+
+                    if (open == DialogResult.Yes && !string.IsNullOrWhiteSpace(result.IssueUrl))
                     {
-                        FileName = "wsl.exe",
-                        Arguments = command,
-                        WorkingDirectory = appRoot,
-                        RedirectStandardOutput = true,
-                        RedirectStandardError = true,
-                        UseShellExecute = false,
-                        CreateNoWindow = true
-                    };
-
-                    using (Process p = Process.Start(psi))
-                    {
-                        if (!p.WaitForExit(timeoutSeconds * 1000))
+                        Process.Start(new ProcessStartInfo
                         {
-                            p.Kill();
-                            LogMessage($"Command timed out after {timeoutSeconds} seconds");
-                            return false;
-                        }
-
-                        if (p.ExitCode != 0)
-                        {
-                            string error = p.StandardError.ReadToEnd();
-                            LogMessage($"Command failed: {error}");
-                            return false;
-                        }
-
-                        return true;
+                            FileName = result.IssueUrl,
+                            UseShellExecute = true
+                        });
                     }
                 }
-                catch (Exception ex)
+                else
                 {
-                    LogMessage($"Command execution failed: {ex.Message}");
-                    return false;
+                    MessageBox.Show(this, result.Message, "Crash report failed", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 }
-            });
+            }
+            finally
+            {
+                SetBusy(false);
+            }
         }
 
-        private string RunWslCommand(string command)
+        private void BtnClearLogs_Click(object? sender, EventArgs e)
+        {
+            txtLogs.Clear();
+            _log.ClearBuffer();
+        }
+
+        private void BtnCopyLogs_Click(object? sender, EventArgs e)
         {
             try
             {
-                ProcessStartInfo psi = new ProcessStartInfo
+                if (!string.IsNullOrEmpty(txtLogs.Text))
                 {
-                    FileName = "wsl.exe",
-                    Arguments = command,
-                    WorkingDirectory = appRoot,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    UseShellExecute = false,
-                    CreateNoWindow = true
-                };
-
-                using (Process p = Process.Start(psi))
-                {
-                    string output = p.StandardOutput.ReadToEnd();
-                    string error = p.StandardError.ReadToEnd();
-                    p.WaitForExit();
-
-                    if (p.ExitCode != 0 && !string.IsNullOrEmpty(error))
-                    {
-                        LogMessage($"WSL Command error: {error}");
-                    }
-
-                    return output;
+                    Clipboard.SetText(txtLogs.Text);
+                    _log.Info("Log copied to clipboard");
                 }
             }
             catch (Exception ex)
             {
-                LogMessage($"WSL exception: {ex.Message}");
-                return $"Exception: {ex.Message}";
+                _log.Warning($"Clipboard copy failed: {ex.Message}");
+            }
+        }
+
+        private void ChkAutoUpdate_CheckedChanged(object? sender, EventArgs e)
+        {
+            _config.AutoUpdateEnabled = chkAutoUpdate.Checked;
+            if (_autoUpdateTimer != null)
+            {
+                _autoUpdateTimer.Enabled = _config.AutoUpdateEnabled && _setupReady;
+            }
+        }
+
+        private void StartTimers()
+        {
+            _statusTimer ??= new System.Windows.Forms.Timer { Interval = 5000 };
+            _statusTimer.Tick -= StatusTimer_Tick;
+            _statusTimer.Tick += StatusTimer_Tick;
+            _statusTimer.Start();
+
+            int hours = Math.Max(1, _config.AutoUpdateIntervalHours);
+            _autoUpdateTimer ??= new System.Windows.Forms.Timer();
+            _autoUpdateTimer.Interval = hours * 60 * 60 * 1000;
+            _autoUpdateTimer.Tick -= AutoUpdateTimer_Tick;
+            _autoUpdateTimer.Tick += AutoUpdateTimer_Tick;
+            _autoUpdateTimer.Enabled = _config.AutoUpdateEnabled;
+        }
+
+        private async void StatusTimer_Tick(object? sender, EventArgs e)
+        {
+            if (_busy || !_setupReady) return;
+            await RefreshStatusAsync();
+        }
+
+        private async void AutoUpdateTimer_Tick(object? sender, EventArgs e)
+        {
+            if (_busy || !_setupReady || !_config.AutoUpdateEnabled) return;
+            await SafeCheckUpdatesAsync(promptIfAvailable: true);
+        }
+
+        private async Task SafeCheckUpdatesAsync(bool promptIfAvailable)
+        {
+            if (!_setupReady) return;
+
+            try
+            {
+                var result = await _updates.CheckForUpdatesAsync();
+                _updateAvailable = result.UpdateAvailable;
+                btnUpdate.Enabled = _updateAvailable && !_busy;
+                lblUpdateBanner.Text = _updateAvailable ? "Update available" : "";
+
+                if (_updateAvailable && promptIfAvailable)
+                {
+                    var apply = MessageBox.Show(
+                        this,
+                        $"{result.Message}\n\nApply update now?",
+                        "Update available",
+                        MessageBoxButtons.YesNo,
+                        MessageBoxIcon.Information);
+
+                    if (apply == DialogResult.Yes)
+                    {
+                        await RunUpdateAsync();
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _log.Warning($"Update check failed: {ex.Message}");
+            }
+        }
+
+        private async Task RefreshStatusAsync()
+        {
+            if (!_setupReady) return;
+
+            try
+            {
+                var status = await _compose.GetStatusAsync();
+                void Apply()
+                {
+                    pillPostgres.Health = status.Postgres;
+                    pillForge.Health = status.Forge;
+                    pillLens.Health = status.Lens;
+
+                    if (!_busy)
+                    {
+                        if (status.AllHealthy)
+                        {
+                            SetOverallStatus("Running", AppTheme.Success);
+                        }
+                        else if (status.AnyRunning)
+                        {
+                            SetOverallStatus("Degraded", AppTheme.Warning);
+                        }
+                        else
+                        {
+                            SetOverallStatus("Stopped", AppTheme.TextMuted);
+                        }
+                    }
+
+                    UpdateActionStates(status);
+                }
+
+                if (InvokeRequired) BeginInvoke(Apply);
+                else Apply();
+            }
+            catch
+            {
+                // Ignore transient status errors.
+            }
+        }
+
+        private void SetOverallStatus(string text, Color color)
+        {
+            statusBadge.SetStatus(text, color);
+        }
+
+        private void SetBusy(bool busy)
+        {
+            _busy = busy;
+            UseWaitCursor = busy;
+            UpdateActionStates();
+        }
+
+        private void UpdateActionStates(StackStatus? status = null)
+        {
+            bool canOperate = _setupReady && !_busy;
+            btnStart.Enabled = canOperate;
+            btnStop.Enabled = canOperate;
+            btnOpen.Enabled = canOperate;
+            btnCheckUpdate.Enabled = canOperate;
+            btnUpdate.Enabled = canOperate && _updateAvailable;
+            btnRollback.Enabled = canOperate && _updates.HasBackupVersion();
+            btnRetrySetup.Enabled = !_busy;
+            btnCrashReport.Enabled = !_busy;
+            chkAutoUpdate.Enabled = !_busy;
+
+            if (status != null)
+            {
+                btnOpen.Enabled = canOperate && status.Lens == ServiceHealth.Healthy;
             }
         }
     }

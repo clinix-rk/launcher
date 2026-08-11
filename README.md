@@ -1,131 +1,123 @@
-# Application Launcher
+# Clinix Launcher
 
-Zero-downtime launcher for Lens + Forge application stack running on Windows with Docker + WSL 2.
+Professional Windows launcher for the Clinix stack (Lens + Forge + Postgres) running on **WSL 2 + Docker Engine**.
+
+## Features
+
+- Modern dark UI with live activity log
+- First-run setup for WSL and Docker Engine inside WSL
+- Start / Stop / Open App
+- Manual and automatic update checks (prompt before apply)
+- Rollback to previous image set
+- One-click crash reports via GitHub Issues API
 
 ## Prerequisites
 
-- Windows 10/11 Pro, Enterprise, or Education
-- WSL 2 with Ubuntu
-- Docker Engine installed in WSL 2
-- .NET 8 Runtime (for running the launcher)
+- Windows 10/11
+- .NET 8 runtime (or use the self-contained release EXE)
+- Administrator rights for first-time WSL install (if needed)
 
-## Quick Start
+Docker Desktop is **not** required. The launcher installs/uses Docker Engine inside WSL when possible.
 
-### 1. Initial Setup
+## Quick start
 
-```powershell
-# Clone this repository
-git clone https://github.com/YOUR_ORG/launcher.git
-cd launcher
-
-# Copy and configure environment
-Copy-Item .env.example .env
-# Edit .env with your credentials
-notepad .env
-```
-
-### 2. First Launch
-
-```powershell
-# Download and run the latest launcher
-# Or compile from source:
-dotnet build -c Release
-.\bin\Release\net8.0-windows\AppLauncher.exe
-```
-
-### 3. Check for Updates
-
-Click "Check Updates" button → If updates available, click "Update"
+1. Download the latest `AppLauncher-*.exe` from Releases (or build from source).
+2. Place `docker-compose.yml` and `.env` next to the EXE (release builds copy `.env.example`).
+3. Copy `.env.example` → `.env` and set at least `POSTGRES_PASSWORD`.
+4. Run `AppLauncher.exe`.
+5. If setup is needed, click **Retry Setup** and approve elevation / Ubuntu prompts.
+6. Click **Start**, then **Open App** (`http://localhost`).
 
 ## Configuration
 
-### Environment Variables
-
-Copy `.env.example` to `.env` and configure:
-
 | Variable | Description | Default |
 |---|---|---|
-| `POSTGRES_DB` | Database name | myapp_db |
-| `POSTGRES_USER` | DB username | postgres |
+| `POSTGRES_DB` | Database name | `clinix_datastore` |
+| `POSTGRES_USER` | DB username | `clinix_application` |
 | `POSTGRES_PASSWORD` | DB password | (required) |
-| `SPRING_PROFILES_ACTIVE` | Spring profile | prod |
-| `APP_ENV` | Application environment | production |
+| `GHCR_ORG` | GHCR organization | `clinix-rk` |
+| `GHCR_TOKEN` | Optional token for private GHCR pulls / tag listing | |
+| `GITHUB_REPORT_REPO` | `owner/repo` for crash issues | `clinix-rk/launcher` |
+| `GITHUB_REPORT_TOKEN` | Fine-grained PAT with Issues write | |
+| `GITHUB_REPORT_LABELS` | Comma-separated labels | `crash-report` |
+| `AUTO_UPDATE_ENABLED` | Check for updates on a timer | `true` |
+| `AUTO_UPDATE_INTERVAL_HOURS` | Hours between auto checks | `6` |
 
-### Docker Images
+### Crash report PAT (maintainers)
 
-Launcher pulls images from GitHub Container Registry (GHCR):
-
-- Frontend: `ghcr.io/YOUR_ORG/lens:latest`
-- Backend: `ghcr.io/YOUR_ORG/forge:latest`
-
-Ensure both repositories are configured to publish to GHCR.
+1. GitHub → Settings → Developer settings → Fine-grained personal access tokens.
+2. Resource owner: your org/user; repository access: only `clinix-rk/launcher` (or your fork).
+3. Permissions: **Issues** → Read and write.
+4. Put the token in `.env` as `GITHUB_REPORT_TOKEN`.
+5. Ensure label `crash-report` exists on the repo (or change `GITHUB_REPORT_LABELS`).
 
 ## Operations
 
-### Update Application
+### Start / Stop
 
-1. Click "Check Updates"
-2. Review available versions
-3. Click "Update"
-4. Launcher will:
-   - Stop running containers
-   - Backup database
-   - Pull latest images
-   - Start new containers
-   - Verify health checks
-   - Open browser to application
+- **Start** runs `docker compose up -d`, waits for health, and streams compose logs.
+- **Stop** runs `docker compose down` (volumes preserved).
+- **Open App** opens `http://localhost` when Lens is healthy.
 
-### Rollback
+### Updates
 
-Click "Rollback" to revert to previous version instantly.
+1. **Check Updates** queries GHCR for Lens/Forge tags.
+2. **Update** stops services, backs up the DB volume, `docker compose pull`, starts again, verifies health, and records the version.
+3. Failed health after update triggers **rollback**.
+4. With **Auto-check updates** enabled, the launcher checks on launch and every N hours, then prompts before applying.
 
-### Start Application
+### Crash reports
 
-Click "Start App" to ensure containers are running and open browser.
+**Send Crash Report** creates a GitHub issue containing:
+
+- Launcher version and machine metadata
+- Docker / WSL versions
+- `docker compose ps`
+- Recent container logs
+- Tail of `launcher.log`
 
 ## Logs
 
-Application logs are stored in `launcher.log` in the launcher directory.
+- On-screen **Activity log** (Clear / Copy)
+- File: `launcher.log` next to the EXE
+- DB backups: `db_backup_*.tar.gz` next to the EXE
 
-To view Docker container logs:
+## Build from source
 
 ```powershell
-wsl -e docker compose logs -f
+dotnet publish -c Release -o ./publish `
+  --self-contained `
+  -p:PublishSingleFile=true `
+  -p:RuntimeIdentifier=win-x64 `
+  src/AppLauncher/AppLauncher.csproj
 ```
+
+Tagged pushes (`v*`) build and publish releases via `.github/workflows/build-release.yml`.
 
 ## Troubleshooting
 
-### Images pull fails
+### Setup stuck on Docker
 
-- Verify GHCR access: `wsl -e docker login ghcr.io`
-- Check `.env` contains correct GHCR credentials
-- Verify repository visibility (public or authenticated)
+```powershell
+wsl --shutdown
+wsl -e bash -lc "sudo service docker start && docker info"
+```
+
+If Docker was just installed, log out of the WSL distro (or `wsl --shutdown`) so `docker` group membership applies.
 
 ### Health checks fail
 
 ```powershell
-# Check container status
-wsl -e docker compose ps
-
-# View logs
-wsl -e docker compose logs forge
-wsl -e docker compose logs lens
+wsl -e bash -lc "cd /mnt/c/path/to/launcher && docker compose ps && docker compose logs --tail 100"
 ```
 
-### Database issues
+Forge health: `http://localhost:8080/api/v1/actuator/health`  
+Lens health: `http://localhost/`
 
-Database backups are stored as `db_backup_*.tar.gz`. To restore:
+### Images pull fails
 
 ```powershell
-wsl -e docker run --rm -v postgres_data:/data -v .:/backup alpine tar xzf /backup/db_backup_YYYYMMDD_HHMMSS.tar.gz -C /
+wsl -e bash -lc "echo $env:GHCR_TOKEN | docker login ghcr.io -u YOUR_USER --password-stdin"
 ```
 
-## Development
-
-### Build EXE Release
-
-```powershell
-dotnet publish -c Release -o ./publish
-```
-
-EXE will be in `publish/AppLauncher.exe`
+(Or set `GHCR_USERNAME` / `GHCR_TOKEN` in `.env` for tag checks; compose pull still needs docker login for private images.)

@@ -1,50 +1,56 @@
-version: '3.8'
+version: "3.9"
 
 services:
   postgres-db:
     image: postgres:16-alpine
-    container_name: myapp-db
+    container_name: clinix-db
     environment:
-      POSTGRES_DB: ${POSTGRES_DB:-myapp_db}
-      POSTGRES_USER: ${POSTGRES_USER:-postgres}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-secretpassword}
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 10s
       timeout: 5s
       retries: 5
 
   forge:
     image: ghcr.io/clinix-rk/forge:latest
-    container_name: myapp-forge
+    container_name: clinix-forge
     pull_policy: always
     ports:
       - "8080:8080"
     environment:
-      - SPRING_DATASOURCE_URL=jdbc:postgresql://postgres-db:5432/${POSTGRES_DB:-myapp_db}
-      - SPRING_DATASOURCE_USERNAME=${POSTGRES_USER:-postgres}
-      - SPRING_DATASOURCE_PASSWORD=${POSTGRES_PASSWORD:-secretpassword}
-      - SPRING_JPA_HIBERNATE_DDL_AUTO=${SPRING_JPA_HIBERNATE_DDL_AUTO:-validate}
+      - SPRING_DATASOURCE_HOST=postgres-db
+      - SPRING_DATASOURCE_PORT=5432
+      - SPRING_DATASOURCE_DATABASE=${POSTGRES_DB:-clinix_datastore}
+      - SPRING_DATASOURCE_USERNAME=${POSTGRES_USER:-clinix_application}
+      - SPRING_DATASOURCE_PASSWORD=${POSTGRES_PASSWORD:-password}
+      - SPRING_JPA_HIBERNATE_DDL_AUTO=validate
       - SPRING_PROFILES_ACTIVE=${SPRING_PROFILES_ACTIVE:-prod}
-      # Add any additional backend environment variables
-      - APP_NAME=${APP_NAME:-MyApp}
+      - SPRING_FLYWAY_ENABLED=true
+      - SPRING_FLYWAY_LOCATIONS=classpath:db/migration
+      - SPRING_FLYWAY_BASELINE_ON_MIGRATE=true
+      - JWT_SECRET=${JWT_SECRET:-default-secret-change-in-prod}
+      - APP_NAME=${APP_NAME:-Clinix}
       - APP_ENV=${APP_ENV:-production}
     depends_on:
       postgres-db:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/api/health"]
-      interval: 10s
+      test: ["CMD-SHELL", "wget --spider -q http://127.0.0.1:8080/api/v1/actuator/health || exit 1"]
+      interval: 15s
       timeout: 5s
-      retries: 3
+      retries: 10
+      start_period: 60s
 
   lens:
     image: ghcr.io/clinix-rk/lens:latest
-    container_name: myapp-lens
+    container_name: clinix-lens
     pull_policy: always
     ports:
       - "80:80"
@@ -52,12 +58,14 @@ services:
       - REACT_APP_API_URL=http://forge:8080
       - REACT_APP_ENV=${REACT_APP_ENV:-production}
     depends_on:
-      - forge
+      forge:
+        condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost/"]
-      interval: 10s
+      test: ["CMD-SHELL", "wget --spider -q http://127.0.0.1/ || exit 1"]
+      interval: 15s
       timeout: 5s
-      retries: 3
+      retries: 5
+      start_period: 30s
 
 volumes:
   postgres_data:

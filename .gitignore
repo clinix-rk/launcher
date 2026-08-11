@@ -6,6 +6,7 @@
 current_version.txt
 backup_version.txt
 launcher.log
+install-docker-wsl.sh
 
 # Database backups
 db_backup_*.tar.gz

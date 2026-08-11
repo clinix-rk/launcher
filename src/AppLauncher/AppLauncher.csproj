@@ -8,15 +8,21 @@
     <LangVersion>latest</LangVersion>
     <AssemblyName>AppLauncher</AssemblyName>
     <RootNamespace>AppLauncher</RootNamespace>
-    <Version>1.0.0</Version>
-    <Authors>Your Organization</Authors>
-    <Description>Zero-downtime launcher for Lens + Forge application</Description>
+    <Version>1.1.0</Version>
+    <Authors>Clinix</Authors>
+    <Description>Clinix launcher for Lens + Forge on Windows with Docker + WSL 2</Description>
+    <ApplicationIcon></ApplicationIcon>
     <SelfContained>false</SelfContained>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="DotNetEnv" Version="2.5.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="..\..\docker-compose.yml" Link="docker-compose.yml" CopyToOutputDirectory="PreserveNewest" Condition="Exists('..\..\docker-compose.yml')" />
+    <None Include="..\..\.env.example" Link=".env.example" CopyToOutputDirectory="PreserveNewest" Condition="Exists('..\..\.env.example')" />
   </ItemGroup>
 
 </Project>
