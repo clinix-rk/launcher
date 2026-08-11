@@ -2,7 +2,7 @@ version: "3.9"
 
 services:
   postgres-db:
-    image: postgres:16-alpine
+    image: postgres:18-alpine
     container_name: clinix-db
     environment:
       POSTGRES_DB: ${POSTGRES_DB}

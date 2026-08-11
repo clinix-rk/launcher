@@ -2,17 +2,21 @@
 setlocal enableextensions enabledelayedexpansion
 
 :: ============================================================================
-:: Docker Desktop Launch & Compose Wrapper with Web Check
-:: Description: Opens Docker Desktop, waits for the engine to initialize,
-::              executes 'docker compose up -d', waits for port 80, and opens browser.
+:: Docker Desktop Launch & Compose Wrapper
 :: ============================================================================
 
-:: 1. Launch Docker Desktop unconditionally
-echo [INFO] Opening Docker Desktop...
-start "" "C:\Program Files\Docker\Docker\Docker Desktop.exe"
+:: 1. Launch Docker Desktop via native CLI tool
+echo [INFO] Requesting Docker Desktop to start...
+call docker desktop start >nul 2>&1
 
-:: 2. Wait for the Docker Engine to respond to CLI calls
-echo [INFO] Waiting for Docker engine to start properly...
+:: Fallback check if 'docker desktop' CLI plugin is not available
+if %errorlevel% neq 0 (
+    echo [WARN] 'docker desktop' CLI plugin not found. Falling back to default executable path...
+    start "" "C:\Program Files\Docker\Docker\Docker Desktop.exe"
+)
+
+:: 2. Wait for Docker Engine to start
+echo [INFO] Waiting for Docker engine to initialize...
 :WAIT_FOR_ENGINE
 timeout /t 3 /nobreak >nul
 docker info >nul 2>&1
@@ -23,27 +27,25 @@ if %errorlevel% neq 0 (
 
 echo [INFO] Docker engine is up and responsive.
 
-:: 3. Run docker compose up -d
-:RUN_COMPOSE
+:: 3. Execute docker compose up -d
 echo [INFO] Executing docker compose up -d...
 docker compose up -d %*
 
 if %errorlevel% neq 0 (
-    echo [ERROR] Docker compose failed to execute.
+    echo [ERROR] Docker compose failed.
     exit /b %errorlevel%
 )
 
-:: 4. Wait for http://localhost:80 to return a valid HTTP response code
-echo [INFO] Waiting for http://localhost:80 to respond...
+:: 4. Poll localhost:80
+echo [INFO] Waiting for http://localhost:80...
 :HTTP_WAIT_LOOP
 timeout /t 2 /nobreak >nul
 curl -s -o nul -w "%%{http_code}" http://localhost:80 | findstr /R "^[2345]" >nul 2>&1
 if %errorlevel% neq 0 (
-    echo [INFO] Waiting for web service on port 80...
     goto HTTP_WAIT_LOOP
 )
 
-:: 5. Open default browser to localhost:80
+:: 5. Open Browser
 echo [INFO] Web service ready. Opening browser...
 start http://localhost:80
 
